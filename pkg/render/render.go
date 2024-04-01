@@ -1,68 +1,93 @@
 package render
 
 import (
-	"fmt"
+	"bytes"
 	"html/template"
 	"log"
 	"net/http"
+	"path/filepath"
+
+	"github.com/Vkanhan/go-rental-marketplace/pkg/config"
+	"github.com/Vkanhan/go-rental-marketplace/pkg/models"
 )
 
-func RenderTemplate(w http.ResponseWriter, tmpl string) {
-	parsedTemplate, err := template.ParseFiles("./template/"+tmpl, "./template/base.layout.tmpl")
-	if err != nil {
-		fmt.Println(err)
-	}
-	err = parsedTemplate.Execute(w, nil)
-	if err != nil {
-		fmt.Println("error parsing the template", err)
-		return
+var app *config.AppConfig
 
-	}
+// NewTemplate sets the config for the template package
+func NewTemplate(a *config.AppConfig) {
+
+	app = a
 }
 
-var tc = make(map[string]*template.Template)
+func AddDefaultData(td *models.TemplateData) *models.TemplateData {
+	return td
+}
 
-func RenderTemplateTest(w http.ResponseWriter, t string) {
+func RenderTemplate(w http.ResponseWriter, tmpl string, td *models.TemplateData) {
 
-	var tmpl *template.Template
-	var err error
+	var tc map[string]*template.Template
 
-	//check to see if we already have template in our cache
-	_, inMap := tc[t]
-	if !inMap {
-		//create the template
-		log.Println("creating template and adding it to cache")
-		err = createTemplateCache(t)
-		if err != nil {
-			log.Println("error creating template", err)
-		}
+	if app.UseCache {
+		//get the template cache from the app config
+		tc = app.TemplateCache
 	} else {
-		//we have template in the cache
-		log.Println("using the cached template")
+		tc, _ = CreateTemplateCache()
 	}
 
-	tmpl = tc[t]
+	//get requested template from the cache
+	t, ok := tc[tmpl]
+	if !ok {
+		log.Fatal("could not get template from template cache")
+	}
 
-	err = tmpl.Execute(w, nil)
+	buf := new(bytes.Buffer)
+
+	td = AddDefaultData(td)
+
+	err := t.Execute(buf, td)
 	if err != nil {
-		log.Println("error executing template:", err)
+		log.Println(err)
 	}
 
+	//render the template
+	_, err = buf.WriteTo(w)
+	if err != nil {
+		log.Println(err)
+	}
 }
 
-func createTemplateCache(t string) error {
-	templates := []string{
-		fmt.Sprintf("/template/%s", t),
-		"./template/base.layout.tmpl",
-	}
+func CreateTemplateCache() (map[string]*template.Template, error) {
 
-	tmpl, err := template.ParseFiles(templates...)
+	myCache := map[string]*template.Template{}
+
+	//get all the files named *page.tmpl from ./template
+	pages, err := filepath.Glob("./templates/*.page.tmpl")
 	if err != nil {
-		return err
+		return myCache, err
 	}
-	//add template to cache (map)
-	tc[t] = tmpl
 
-	return nil
+	//range through all the files ending with *.page.tmpl
+	for _, page := range pages {
+		name := filepath.Base(page)
+		ts, err := template.New(name).ParseFiles(page)
+		if err != nil {
+			return myCache, err
+		}
+		matches, err := filepath.Glob("./templates/base.layout.tmpl")
+		if err != nil {
+			return myCache, err
+		}
+
+		if len(matches) > 0 {
+			ts, err = ts.ParseGlob("./templates/base.layout.tmpl")
+			if err != nil {
+				return myCache, err
+			}
+		}
+
+		myCache[name] = ts
+
+	}
+	return myCache, nil
 
 }
